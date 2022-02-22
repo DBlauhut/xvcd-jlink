@@ -1,6 +1,7 @@
 #include <stdio.h>
+#include <errno.h>
 
-#include "JlinkARM.h"
+#include "JLinkARM.h"
 #include "JlinkUtil.h"
 
 #include "io_jlink.h"
@@ -31,11 +32,11 @@ int io_scan(const unsigned char *TMS, const unsigned char *TDI, unsigned char *T
   }
 
   r = JLINKARM_JTAG_StoreGetRaw(TDI, TDO, TMS, bits);
-  if (!r)
-  {
-    perror("FATAL: failed to execute raw command\n");
-    return -1;
-  }
+//  if (!r)
+//  {
+//    printf("FATAL: failed to execute raw command %d %d \n", r, errno);
+//    return -1;
+//  }
 
   return 0;
 }

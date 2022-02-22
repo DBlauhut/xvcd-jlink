@@ -6,8 +6,13 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
-#include <winsock2.h>
-
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/select.h>
+#include <arpa/inet.h>
+#include <netinet/tcp.h>
+#include <getopt.h>
+#include <errno.h>
 #include "io_jlink.h"
 #include "JlinkUtil.h"
 
@@ -62,13 +67,12 @@ static int jtag_step(int state, int tms) {
   return next_state[state][tms];
 }
 
-static int sread(SOCKET fd, void *target, int len) {
+static int sread(int fd, void *target, int len) {
   char *t = target;
   while (len) {
     int r = recv(fd, t, len, 0);
-    if (r == SOCKET_ERROR || r == 0) {
-      int err = WSAGetLastError();
-      printf( "Recv failed with error: %d\n", err );
+    if (r <= 0) {
+      printf( "Recv failed with error: %d\n", errno );
       if(r == 0) {
         puts("Seems like connection was gracefully closed. Exiting");
       }
@@ -88,7 +92,7 @@ static int sread(SOCKET fd, void *target, int len) {
 //   after going test_logic_reset. This ensures that one
 //   client can't disrupt the other client's IR or state.
 //
-int handle_data(SOCKET fd) {
+int handle_data(int fd) {
   int i;
   int seen_tlr = 0;
 
@@ -117,7 +121,7 @@ int handle_data(SOCKET fd) {
 
     unsigned int nr_bytes = (len + 7) / 8;
     if (nr_bytes * 2 > sizeof(buffer)) {
-      fprintf(stderr, "buffer size exceeded %d[%d]\n", nr_bytes, sizeof(buffer));
+      fprintf(stderr, "buffer size exceeded %d[%ld]\n", nr_bytes, sizeof(buffer));
       return 1;
     }
 
@@ -176,7 +180,7 @@ int handle_data(SOCKET fd) {
     }
 
     if (send(fd, (const char*)result, nr_bytes, 0) != nr_bytes) {
-      printf("Send failed with error: %d\n", WSAGetLastError());
+      printf("Send failed with error: %d\n", errno);
       return 1;
     }
 
@@ -193,7 +197,7 @@ int handle_data(SOCKET fd) {
 int main(int argc, char **argv) {
   int ret = 0;
   int i;
-  SOCKET s;
+  int s;
   int c;
   struct sockaddr_in address;
   unsigned short  port = DEFAULT_PORT;
@@ -235,45 +239,35 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  WSADATA wsaData;
 
   int iResult;
 
-  // Initialize Winsock
-  iResult = WSAStartup(MAKEWORD(2,2), &wsaData);
-  if (iResult != 0) {
-    printf("WSAStartup failed: %d\n", iResult);
-    return 1;
-  }
 
-  s = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+  s = socket(AF_INET, SOCK_STREAM, 0);
 
-  if (s == INVALID_SOCKET) {
-    printf("Error at socket(): %d\n", WSAGetLastError());
-    WSACleanup();
+  if (s == -1) {
+    printf("Error at socket(): %d\n", errno);
     return 1;
   }
 
   i = 1;
   setsockopt(s, SOL_SOCKET, SO_REUSEADDR, (char *)&i, sizeof i);
 
-  address.sin_addr.s_addr = INADDR_ANY;
+  address.sin_addr.s_addr = htonl(INADDR_ANY);
   address.sin_port = htons(port);
   address.sin_family = AF_INET;
 
   iResult = bind(s, (struct sockaddr *) &address, sizeof(address));
 
-  if (iResult == SOCKET_ERROR) {
-    printf("Bind failed with error: %d\n", WSAGetLastError());
-    closesocket(s);
-    WSACleanup();
+  if (iResult != 0) {
+    printf("Bind failed with error: %d\n", errno);
+    close(s);
     return 1;
   }
 
-  if ( listen( s, SOMAXCONN ) == SOCKET_ERROR ) {
-    printf( "Listen failed with error: %d\n", WSAGetLastError() );
-    closesocket(s);
-    WSACleanup();
+  if ( listen( s, SOMAXCONN ) != 0 ) {
+    printf( "Listen failed with error: %d\n", errno );
+    close(s);
     return 1;
   }
 
@@ -290,14 +284,14 @@ int main(int argc, char **argv) {
   }
   while (1) {
     fd_set read = conn, except = conn;
-    SOCKET fd;
+    int fd;
 
     //
     // Look for work to do.
     //
 
-    if (select(maxfd + 1, &read, 0, &except, 0) == SOCKET_ERROR) {
-      printf( "Select failed with error: %d\n", WSAGetLastError() );
+    if (select(maxfd + 1, &read, 0, &except, 0) < 0) {
+      printf( "Select failed with error: %d\n", errno );
       break;
     }
 
@@ -308,15 +302,15 @@ int main(int argc, char **argv) {
         //
 
         if (fd == s) {
-          SOCKET newfd;
+          int newfd;
           int nsize = sizeof(address);
 
           newfd = accept(s, (struct sockaddr*)&address, &nsize);
           if (verbose) {
             printf("connection accepted - fd %d\n", newfd);
           }
-          if (newfd == INVALID_SOCKET) {
-            printf("accept failed with error: %d\n", WSAGetLastError());
+          if (newfd < 0) {
+            printf("accept failed with error: %d\n", errno);
           } else {
             puts("setting TCP_NODELAY to 1");
             int flag = 1;
@@ -353,7 +347,7 @@ int main(int argc, char **argv) {
 
             if (verbose)
               printf("connection closed - fd %d\n", fd);
-            closesocket(fd);
+            close(fd);
             FD_CLR(fd, &conn);
           }
         }
@@ -365,15 +359,14 @@ int main(int argc, char **argv) {
         if (verbose) {
           printf("connection aborted - fd %d\n", fd);
         }
-        closesocket(fd);
+        close(fd);
         FD_CLR(fd, &conn);
         if (fd == s)
           break;
       }
     }
   }
-  closesocket(s);
-  WSACleanup();
+  close(s);
   //
   // Un-map IOs.
   //

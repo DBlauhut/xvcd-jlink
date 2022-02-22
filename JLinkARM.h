@@ -7,7 +7,7 @@
 extern "C" {
 #endif
 
-#define JLINKAPI __cdecl
+#define JLINKAPI
 #define ON  1
 #define OFF 0
 

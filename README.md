@@ -1,3 +1,13 @@
+
+i modified xvcd-jlink to run on ubuntu 20.04.
+the code quality is horrible, but i needed a jtag adapter asap and i had no time to clean up. 
+i removed the windows dll and i have no clue where the JLinkARM.h header is from.  
+
+prerequisites:
+apt install -y jlink
+
+---
+
 "# xvcd-jlink" 
 
 Usage: xvcd [-v] [-p port] [-s jtag_speed_in_kHz] [-i core_id]
